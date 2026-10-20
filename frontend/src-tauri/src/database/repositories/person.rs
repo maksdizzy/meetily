@@ -67,11 +67,12 @@ async fn meetings_with_person(conn: &mut SqliteConnection, person_id: &str) -> R
 }
 
 /// Forgets one person, or everyone with `person_id` None: linked speakers keep their name as
-/// text typed by the user, and suggestions (of new names too when forgetting everyone) and
-/// rejections of the forgotten go.
+/// text typed by the user but lose their stored voice, and suggestions (of new names too when
+/// forgetting everyone) and rejections of the forgotten go.
 async fn forget_conn(conn: &mut SqliteConnection, person_id: Option<&str>) -> Result<(), SqlxError> {
+    // The voice of a speaker linked to the forgotten goes too: it identifies that person.
     sqlx::query(
-        "UPDATE meeting_speakers SET person_id = NULL, name_source = 'user'
+        "UPDATE meeting_speakers SET person_id = NULL, name_source = 'user', embedding = NULL
          WHERE person_id IS NOT NULL AND (?1 IS NULL OR person_id = ?1)",
     )
     .bind(person_id)
@@ -573,6 +574,45 @@ mod tests {
         assert_eq!(s.link.person_id, None);
         assert_eq!(s.link.name_source, Some(NameSource::User));
         assert!(person(&pool, "person-noah").await.is_none());
+    }
+
+    async fn has_voice(pool: &SqlitePool, meeting_id: &str, key: &str) -> bool {
+        sqlx::query_scalar("SELECT embedding IS NOT NULL FROM meeting_speakers WHERE meeting_id = ?1 AND speaker_key = ?2")
+            .bind(meeting_id)
+            .bind(key)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn forget_deletes_the_voice_of_the_forgotten_person_only() {
+        let pool = migrated_pool().await;
+        seed_person(&pool, "person-noah", "Noah").await;
+        seed_person(&pool, "person-ana", "Ana").await;
+        seed_meeting(&pool, "m1", &[]).await;
+        add_speaker(&pool, "m1", "spk_0", Some("Noah"), Some("person-noah"), Some(NameSource::User), true).await;
+        add_speaker(&pool, "m1", "spk_1", Some("Ana"), Some("person-ana"), Some(NameSource::User), true).await;
+
+        PeopleRepository::forget(&pool, "person-noah").await.unwrap();
+
+        assert!(!has_voice(&pool, "m1", "spk_0").await, "the forgotten person's voice is deleted");
+        assert!(has_voice(&pool, "m1", "spk_1").await);
+    }
+
+    #[tokio::test]
+    async fn forget_all_deletes_every_named_voice_and_keeps_unnamed_ones() {
+        let pool = migrated_pool().await;
+        seed_person(&pool, "person-noah", "Noah").await;
+        seed_meeting(&pool, "m1", &[]).await;
+        add_speaker(&pool, "m1", "spk_0", Some("Noah"), Some("person-noah"), Some(NameSource::User), true).await;
+        add_speaker(&pool, "m1", "spk_1", None, None, None, true).await;
+
+        PeopleRepository::forget_all(&pool).await.unwrap();
+
+        assert!(!has_voice(&pool, "m1", "spk_0").await);
+        // An unnamed speaker's voice identifies nobody; re-running Identify uses it to keep labels.
+        assert!(has_voice(&pool, "m1", "spk_1").await);
     }
 
     #[tokio::test]
