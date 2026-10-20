@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  buildSpeakerNameMap, defaultSpeakerLabel, formatPropagationMessage, formatSpeakerCount,
+  buildSpeakerNameMap, currentSpeakerNames, defaultSpeakerLabel, formatPropagationMessage, formatSpeakerCount,
   isSpeakerRunStart, rowSpeakerControl, speakerNameState,
 } from '../../src/lib/speakers';
 import type { MeetingSpeaker } from '../../src/types';
@@ -71,5 +71,19 @@ describe('speaker name state', () => {
     expect(speakerNameState(makeSpeaker('spk_1', {
       display_name: '  ', suggested_name: 'Ana', suggested_person_id: 'p2', suggestion_source: 'voice', suggestion_reason: 'voice match 0.68',
     }))).toEqual({ kind: 'suggestion', name: 'Ana', reason: 'voice match 0.68', source: 'voice' });
+  });
+});
+
+describe('names read when a transcript is sent or copied', () => {
+  test('come from the saved speakers, not from the copy the caller holds', async () => {
+    const names = await currentSpeakerNames('meeting-a', { spk_0: 'Speaker 1' }, async () => [speaker('spk_0', 'Noah')]);
+    expect(names).toEqual({ spk_0: 'Noah' });
+  });
+
+  test('fall back to the caller copy when the speakers cannot be read', async () => {
+    const names = await currentSpeakerNames('meeting-a', { spk_0: 'Noah' }, async () => {
+      throw new Error('Database unavailable');
+    });
+    expect(names).toEqual({ spk_0: 'Noah' });
   });
 });

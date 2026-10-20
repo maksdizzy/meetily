@@ -2,7 +2,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'b
 import { useEffect, useState } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { parseSummaryContent } from '../../src/lib/summary-content';
-import type { MeetingSummary, SummaryProcessResponse } from '../../src/types';
+import type { MeetingSpeaker, MeetingSummary, SummaryProcessResponse } from '../../src/types';
+import { makeSpeaker } from '../fixtures/speakers';
 
 // Bun shares module mocks between test files; restore application modules after this suite.
 const originalAnalytics = { ...await import('../../src/lib/analytics') };
@@ -24,15 +25,19 @@ mock.module('../../src/lib/analytics', () => ({ default: {
   trackSummaryGenerationCompleted: trackCompletion,
 } }));
 let startProcess: () => Promise<{ process_id: string }>;
+const meetingTranscript = { text: 'Meeting transcript', timestamp: '00:00' };
+let transcripts: Array<Record<string, unknown>> = [meetingTranscript];
+let savedSpeakers: MeetingSpeaker[] = [];
+let pageSpeakerNames: Record<string, string> | undefined;
 let getSummary: (meetingId: string) => Promise<SummaryProcessResponse>;
 const invoke = mock(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
   if (command === 'api_get_meetings') return [];
   if (command === 'api_get_summary') return getSummary(args!.meetingId as string);
-  if (command === 'api_get_meeting_transcripts') return { transcripts: [{ text: 'Meeting transcript', timestamp: '00:00' }], total_count: 1 };
+  if (command === 'api_get_meeting_transcripts') return { transcripts, total_count: transcripts.length };
   if (command === 'get_ollama_models') return [{ name: 'test' }];
   if (command === 'api_process_transcript') return startProcess();
   if (command === 'api_cancel_summary') return { cancelled: true };
-  if (command === 'api_list_meeting_speakers') return [];
+  if (command === 'api_list_meeting_speakers') return savedSpeakers;
   throw new Error(`Unexpected command: ${command}`);
 });
 mock.module('@tauri-apps/api/core', () => ({ invoke }));
@@ -59,7 +64,7 @@ function Status({ initialSummary, meetingId = 'meeting-a' }: {
     meeting: { id: meetingId, created_at: '2026-09-01T00:00:00Z' },
     transcripts: [], modelConfig: { provider: 'ollama', model: configuredModel, whisperModel: 'base' },
     isModelConfigLoading: false, selectedTemplate: 'daily_standup',
-    setAiSummary, updateMeetingTitle, initialSummary,
+    setAiSummary, updateMeetingTitle, initialSummary, speakerNames: pageSpeakerNames,
   });
   return <output>{state.summaryStatus}:{state.summaryError}:{title}:{JSON.stringify(summary)}</output>;
 }
@@ -74,6 +79,9 @@ beforeEach(() => {
   configuredModel = 'test';
   timers.clear(); notify.mockClear(); trackCompletion.mockClear(); invoke.mockClear();
   getSummary = async () => response();
+  transcripts = [meetingTranscript];
+  savedSpeakers = [];
+  pageSpeakerNames = undefined;
   startProcess = async () => ({ process_id: 'attempt-a' });
   globalThis.setInterval = ((callback: () => Promise<void>) => {
     const id = ++nextTimer; timers.set(id, callback); return id;
@@ -245,6 +253,16 @@ describe('summary state restored when returning to a meeting', () => {
     getSummary = async () => response({ status: 'completed', data: { markdown: 'Finished summary' } });
     await tick();
     expect(state.summaryStatus).toBe('completed');
+  });
+
+  test('the summary names speakers as saved when it is sent, not as the page last loaded them', async () => {
+    transcripts = [{ text: 'Hello everyone', timestamp: '00:00', audio_start_time: 0, speaker: 'spk_0' }];
+    savedSpeakers = [makeSpeaker('spk_0', { display_name: 'Noah' })];
+    pageSpeakerNames = { spk_0: 'Speaker 1' };
+    await show(response({ status: 'idle', start: null }));
+    await act(async () => state.handleGenerateSummary());
+    const call = invoke.mock.calls.find(([command]) => command === 'api_process_transcript');
+    expect((call?.[1] as { text: string } | undefined)?.text).toBe('[00:00] Noah: Hello everyone');
   });
 
   test('completion analytics retain the model used to start the attempt after settings change', async () => {

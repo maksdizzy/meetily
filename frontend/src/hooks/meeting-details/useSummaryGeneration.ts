@@ -18,7 +18,7 @@ import {
   readCachedDetectedSummaryLanguage,
 } from '@/lib/summary-language-preferences';
 import { parseSummaryContent, readSummaryMetadata } from '@/lib/summary-content';
-import { fetchSpeakerNames, speakerLabel } from '@/lib/speakers';
+import { currentSpeakerNames, speakerLabel } from '@/lib/speakers';
 
 async function resolveSummaryLanguage(
   meetingId: string,
@@ -504,7 +504,7 @@ export function useSummaryGeneration({
     }
 
     await processSummary({
-      ...buildSummaryTranscriptPayload(allTranscripts, speakerNames ?? await fetchSpeakerNames(meeting.id)),
+      ...buildSummaryTranscriptPayload(allTranscripts, await currentSpeakerNames(meeting.id, speakerNames)),
       customPrompt,
     });
   }, [
@@ -530,7 +530,7 @@ export function useSummaryGeneration({
     }
 
     await processSummary({
-      ...buildSummaryTranscriptPayload(allTranscripts, speakerNames ?? await fetchSpeakerNames(meeting.id)),
+      ...buildSummaryTranscriptPayload(allTranscripts, await currentSpeakerNames(meeting.id, speakerNames)),
       isRegeneration: true
     });
   }, [meeting.id, fetchAllTranscripts, buildSummaryTranscriptPayload, processSummary, speakerNames]);

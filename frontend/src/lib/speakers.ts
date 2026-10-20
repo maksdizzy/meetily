@@ -37,14 +37,29 @@ export function speakerColor(key: string): { chip: string; dot: string } {
   return PALETTE[index % PALETTE.length];
 }
 
-export async function fetchSpeakerNames(meetingId: string): Promise<Record<string, string>> {
+type SpeakerLoader = (meetingId: string) => Promise<MeetingSpeaker[]>;
+
+const loadMeetingSpeakers: SpeakerLoader = (meetingId) =>
+  invoke<MeetingSpeaker[]>('api_list_meeting_speakers', { meetingId });
+
+/**
+ * Speaker names as saved now. A transcript that is sent or copied reads them at that moment, so a
+ * name written just before (an automatic guess finishing, say) is included even when the page's
+ * own copy has not reloaded yet. Returns `fallback` when the speakers cannot be read.
+ */
+export async function currentSpeakerNames(
+  meetingId: string,
+  fallback: Record<string, string> = {},
+  load: SpeakerLoader = loadMeetingSpeakers,
+): Promise<Record<string, string>> {
   try {
-    return buildSpeakerNameMap(await invoke<MeetingSpeaker[]>('api_list_meeting_speakers', { meetingId }));
+    return buildSpeakerNameMap(await load(meetingId));
   } catch (error) {
     console.error('Failed to load meeting speakers:', error);
-    return {};
+    return fallback;
   }
 }
+
 
 /** True when row `index` starts a run of rows by the same speaker. */
 export function isSpeakerRunStart(segments: ReadonlyArray<{ speaker?: string | null }>, index: number): boolean {
