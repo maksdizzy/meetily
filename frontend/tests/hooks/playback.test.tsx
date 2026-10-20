@@ -337,7 +337,7 @@ describe('usePlayback', () => {
     expect(controls.rate).toBe(1.5);
   });
 
-  test('Space toggles playback, also on the seek bar and on buttons, but not in a text field', async () => {
+  test('Space toggles playback on the seek bar, but not on buttons or in a text field', async () => {
     const keyListeners = new Set<(event: unknown) => void>();
     Object.defineProperty(globalThis, 'document', {
       configurable: true,
@@ -355,9 +355,10 @@ describe('usePlayback', () => {
     const audio = await mount();
     expect(await press({ tagName: 'INPUT', type: 'range', closest: () => null })).toBe(true);
     expect(audio.paused).toBe(false);
-    expect(await press({ tagName: 'BUTTON', closest: () => null })).toBe(true);
-    expect(audio.paused).toBe(true);
+    // A button's own Space click would be cancelled by a handled keydown.
+    expect(await press({ tagName: 'BUTTON', closest: () => null })).toBe(false);
+    expect(audio.paused).toBe(false);
     expect(await press({ tagName: 'INPUT', type: 'text', closest: () => null })).toBe(false);
-    expect(audio.paused).toBe(true);
+    expect(audio.paused).toBe(false);
   });
 });

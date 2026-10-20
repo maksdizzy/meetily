@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import {
   CLIP_PREFETCH_SECONDS, CLIP_SECONDS, FORCE_CLIP_KEY, choosePlaybackMode,
   clockToFile, fileToClock, followAlong, isTypingTarget, needsMoreRows, readForceClipPlayback, rowIndexAtTime,
+  spaceTogglesPlayback,
   shouldPrefetchNextClip, type FollowState, type TimeTable,
 } from '../../src/lib/playback';
 
@@ -103,6 +104,22 @@ describe('follow along and the Space key', () => {
     expect(followAlong(scrolled, 'play-from-row')).toEqual(following);
     expect(followAlong(scrolled, 'paused')).toEqual(following);
     expect(followAlong(following, 'paused')).toBe(following); // unchanged state keeps its identity
+  });
+
+  test('Space toggles playback on page content and the seek bar, not on controls Space activates or in a dialog', () => {
+    const none = () => null;
+    expect(spaceTogglesPlayback(null)).toBe(true);
+    expect(spaceTogglesPlayback({ tagName: 'BODY', closest: none })).toBe(true);
+    expect(spaceTogglesPlayback({ tagName: 'INPUT', type: 'range', closest: none })).toBe(true); // the seek bar
+    expect(spaceTogglesPlayback({ tagName: 'DIV', closest: none })).toBe(true); // a transcript row
+    expect(spaceTogglesPlayback({ tagName: 'INPUT', type: 'text', closest: none })).toBe(false);
+    expect(spaceTogglesPlayback({ tagName: 'BUTTON', closest: none })).toBe(false);
+    expect(spaceTogglesPlayback({ tagName: 'INPUT', type: 'checkbox', closest: none })).toBe(false);
+    expect(spaceTogglesPlayback({ tagName: 'SELECT', closest: none })).toBe(false);
+    const inside = (selector: string) => ({ tagName: 'SPAN', closest: (s: string) => (s.includes(selector) ? {} : null) });
+    expect(spaceTogglesPlayback(inside('[role="switch"]'))).toBe(false); // the thumb of a switch
+    expect(spaceTogglesPlayback(inside('button'))).toBe(false); // the label inside a button
+    expect(spaceTogglesPlayback(inside('[role="dialog"]'))).toBe(false); // audio would start behind it
   });
 
   test('isTypingTarget for text inputs, text areas and editable content, not for the seek bar or buttons', () => {

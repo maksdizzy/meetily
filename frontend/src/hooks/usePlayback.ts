@@ -5,7 +5,7 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import type { PlaybackSource } from '@/types';
 import { errorMessage } from '@/lib/errors';
 import {
-  CLIP_SECONDS, choosePlaybackMode, clockToFile, fileToClock, isTypingTarget, readForceClipPlayback,
+  CLIP_SECONDS, choosePlaybackMode, clockToFile, fileToClock, readForceClipPlayback, spaceTogglesPlayback,
   shouldPrefetchNextClip,
 } from '@/lib/playback';
 
@@ -404,12 +404,13 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
     };
   }, [enabled, meetingId, cancelPendingSeek, clock, dropNextClip, loadClipAt, renderClip, report, showClip]);
 
-  // Space toggles playback unless focus is in a text field (the seek bar and buttons included).
+  // Space toggles playback on page content and the seek bar, not in text fields, on controls Space
+  // activates by itself, or inside a dialog.
   useEffect(() => {
     if (!source || typeof document === 'undefined') return;
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.code !== 'Space' && event.key !== ' ') || event.repeat || event.defaultPrevented) return;
-      if (isTypingTarget(event.target as HTMLElement | null)) return;
+      if (!spaceTogglesPlayback(event.target as HTMLElement | null)) return;
       event.preventDefault();
       toggle();
     };

@@ -113,3 +113,30 @@ export function isTypingTarget(
   if (tag === 'textarea' || el.isContentEditable) return true;
   return !!el.closest?.('[contenteditable]:not([contenteditable="false"])');
 }
+
+/** Input types whose control Space activates by itself. */
+const SPACE_ACTIVATED_INPUT_TYPES = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'color', 'image']);
+/** Controls Space activates by itself, matched on the target or an ancestor (a label inside a button). */
+const SPACE_ACTIVATED = [
+  'button', 'select', 'summary', '[role="button"]', '[role="switch"]', '[role="checkbox"]', '[role="radio"]',
+  '[role="tab"]', '[role="menuitem"]', '[role="menuitemcheckbox"]', '[role="menuitemradio"]', '[role="option"]',
+  '[role="combobox"]',
+].join(', ');
+const DIALOG = 'dialog, [role="dialog"], [role="alertdialog"]';
+
+/**
+ * Whether Space on `el` toggles playback. Not while typing; not on a control Space activates by
+ * itself, whose click a handled keydown would cancel; and not inside a dialog, where audio would
+ * start behind it. Page content (a transcript row, the page body) and the seek bar do toggle.
+ */
+export function spaceTogglesPlayback(
+  el: { tagName?: string; type?: string; isContentEditable?: boolean; closest?: (s: string) => unknown } | null,
+): boolean {
+  if (!el) return true;
+  if (isTypingTarget(el)) return false;
+  const tag = el.tagName?.toLowerCase();
+  if (tag === 'button' || tag === 'select' || tag === 'summary') return false;
+  if (tag === 'input' && SPACE_ACTIVATED_INPUT_TYPES.has((el.type ?? '').toLowerCase())) return false;
+  if (el.closest?.(DIALOG)) return false;
+  return !el.closest?.(SPACE_ACTIVATED);
+}
