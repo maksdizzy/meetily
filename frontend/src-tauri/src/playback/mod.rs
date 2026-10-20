@@ -28,7 +28,8 @@ pub struct PlaybackSource {
 
 const NO_RECORDING: &str = "This meeting has no recording";
 
-/// The meeting's audio file, found in the folder stored for it, with symlinks resolved.
+/// The meeting's audio file, found in the folder stored for it, with symlinks resolved; it must
+/// resolve into that folder.
 pub(crate) async fn meeting_audio_path(pool: &SqlitePool, meeting_id: &str) -> Result<PathBuf, String> {
     let meeting = MeetingsRepository::get_meeting_metadata(pool, meeting_id)
         .await
@@ -40,8 +41,16 @@ pub(crate) async fn meeting_audio_path(pool: &SqlitePool, meeting_id: &str) -> R
         .ok_or_else(|| NO_RECORDING.to_string())?;
     let audio =
         crate::audio::retranscription::find_audio_file(Path::new(&folder)).map_err(|_| NO_RECORDING.to_string())?;
-    // The asset protocol checks its scope against the resolved path, so grant and serve that one.
-    std::fs::canonicalize(&audio).map_err(|_| NO_RECORDING.to_string())
+    // The asset protocol checks its scope against the resolved path, so grant and serve that one,
+    // but only when it lies in the meeting folder itself: a link named like a recording must not
+    // open a file elsewhere. A linked folder is fine.
+    let resolved = std::fs::canonicalize(&audio).map_err(|_| NO_RECORDING.to_string())?;
+    let folder = std::fs::canonicalize(&folder).map_err(|_| NO_RECORDING.to_string())?;
+    if resolved.parent() != Some(folder.as_path()) {
+        log::warn!("Refusing to play {}: it resolves outside the meeting folder", audio.display());
+        return Err(NO_RECORDING.to_string());
+    }
+    Ok(resolved)
 }
 
 /// Transcript clock → playback position. The player seeks the `<audio>` element and the WAV
@@ -146,7 +155,9 @@ mod tests {
         let pool = migrated_pool().await;
         seed_meeting(&pool, "m", &[]).await;
         set_folder(&pool, "m", dir.path()).await;
-        assert_eq!(meeting_audio_path(&pool, "m").await.unwrap(), dir.path().join("audio.wav"));
+        // Resolved: on macOS the temp folder itself sits behind a link (/var -> /private/var).
+        let expected = std::fs::canonicalize(dir.path().join("audio.wav")).unwrap();
+        assert_eq!(meeting_audio_path(&pool, "m").await.unwrap(), expected);
     }
 
     #[cfg(unix)]
@@ -162,6 +173,19 @@ mod tests {
         set_folder(&pool, "m", &link).await;
         let expected = std::fs::canonicalize(real.path().join("audio.wav")).unwrap();
         assert_eq!(meeting_audio_path(&pool, "m").await.unwrap(), expected);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_audio_file_linked_from_outside_the_folder_is_refused() {
+        let outside = tempfile::tempdir().unwrap();
+        write_wav(&outside.path().join("secret.wav"), 16_000, 1, &[0.0; 1600]);
+        let folder = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.wav"), folder.path().join("audio.wav")).unwrap();
+        let pool = migrated_pool().await;
+        seed_meeting(&pool, "m", &[]).await;
+        set_folder(&pool, "m", folder.path()).await;
+        assert_eq!(meeting_audio_path(&pool, "m").await.unwrap_err(), "This meeting has no recording");
     }
 
     #[tokio::test]
