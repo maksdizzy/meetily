@@ -60,6 +60,18 @@ export function needsMoreRows(rows: ReadonlyArray<{ timestamp: number; endTime?:
   return !last || clockS >= (last.endTime ?? last.timestamp);
 }
 
+/**
+ * Index of the row playing at `clockS`, or -1 while that row lies beyond the loaded pages (a far
+ * seek or a speaker sample), so follow-along does not jump to the last loaded row meanwhile.
+ */
+export function playingRowIndex(
+  rows: ReadonlyArray<{ timestamp: number; endTime?: number }>,
+  clockS: number,
+  hasMore: boolean,
+): number {
+  return needsMoreRows(rows, clockS, hasMore) ? -1 : rowIndexAtTime(rows, clockS);
+}
+
 /** Length of one WAV clip in the fallback mode. */
 export const CLIP_SECONDS = 30;
 /** The next clip is requested this long before the current one ends. */

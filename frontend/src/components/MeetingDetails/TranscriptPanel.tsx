@@ -7,7 +7,7 @@ import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { rowSpeakerControl } from '@/lib/speakers';
-import { followAlong, needsMoreRows, rowIndexAtTime, type FollowState } from '@/lib/playback';
+import { followAlong, needsMoreRows, playingRowIndex, type FollowState } from '@/lib/playback';
 import { SpeakerChip } from '@/components/Speakers/SpeakerChip';
 import { SpeakerBar } from '@/components/Speakers/SpeakerBar';
 import { SpeakerJobBanner } from '@/components/Speakers/SpeakerJobBanner';
@@ -124,7 +124,7 @@ export function TranscriptPanel({
   // row changes or the next page is needed, not on every timeupdate.
   const activeIndex = usePlaybackClockSelector(
     playback.clock,
-    (clockS) => (playing ? rowIndexAtTime(convertedSegments, clockS) : -1),
+    (clockS) => (playing ? playingRowIndex(convertedSegments, clockS, !!hasMore) : -1),
   );
   const activeSegmentId = follow.following && activeIndex >= 0 ? convertedSegments[activeIndex].id : null;
   const onPlayFrom = useCallback((startS: number) => {

@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import {
   CLIP_PREFETCH_SECONDS, CLIP_SECONDS, FORCE_CLIP_KEY, choosePlaybackMode,
   clockToFile, fileToClock, followAlong, isTypingTarget, needsMoreRows, readForceClipPlayback, rowIndexAtTime,
-  spaceTogglesPlayback,
+  playingRowIndex, spaceTogglesPlayback,
   shouldPrefetchNextClip, type FollowState, type TimeTable,
 } from '../../src/lib/playback';
 
@@ -104,6 +104,15 @@ describe('follow along and the Space key', () => {
     expect(followAlong(scrolled, 'play-from-row')).toEqual(following);
     expect(followAlong(scrolled, 'paused')).toEqual(following);
     expect(followAlong(following, 'paused')).toBe(following); // unchanged state keeps its identity
+  });
+
+  test('the playing row is unknown while it lies beyond the loaded pages', () => {
+    const rows = [{ timestamp: 0, endTime: 5 }, { timestamp: 5, endTime: 9 }, { timestamp: 9, endTime: 12 }];
+    expect(playingRowIndex(rows, 6, true)).toBe(1);
+    // Not the last loaded row: the row playing at 2:30:00 is on a page that is still loading.
+    expect(playingRowIndex(rows, 9000, true)).toBe(-1);
+    // With every page loaded, the last row is the one playing.
+    expect(playingRowIndex(rows, 9000, false)).toBe(2);
   });
 
   test('Space toggles playback on page content and the seek bar, not on controls Space activates or in a dialog', () => {
