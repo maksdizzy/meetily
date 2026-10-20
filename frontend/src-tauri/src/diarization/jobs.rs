@@ -484,6 +484,19 @@ where
 
 /// Hold an automatic job before a heavy stage while a recording is live, so identification does
 /// not compete with live transcription for CPU. Jobs the user started are not held.
+/// Holds the calling diarization thread while a recording runs, so an automatic job leaves the CPU
+/// to live transcription. Returns when the recording ends or the job is cancelled; `paused` is
+/// called once when the wait starts.
+fn pause_while_recording(recording: impl Fn() -> bool, cancelled: impl Fn() -> bool, paused: impl FnOnce(), poll: Duration) {
+    let mut paused = Some(paused);
+    while recording() && !cancelled() {
+        if let Some(p) = paused.take() {
+            p();
+        }
+        std::thread::sleep(poll);
+    }
+}
+
 async fn yield_to_recording<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest, percent: u32) -> Result<()> {
     if !req.automatic {
         return Ok(());
@@ -849,6 +862,17 @@ struct StoredRow {
     span: Option<RowSpan>,
 }
 
+/// Err when no row has the times speakers are matched by (no transcript, or one saved without them).
+fn ensure_rows_can_be_labelled(rows: &[StoredRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Err(anyhow!("This meeting has no transcript to label with speakers"));
+    }
+    if rows.iter().all(|r| r.span.is_none()) {
+        return Err(anyhow!("This meeting's transcript has no line timings, so speakers cannot be matched to its lines"));
+    }
+    Ok(())
+}
+
 /// Labels and splits produced for the stored rows.
 #[derive(Default)]
 struct RowUpdates {
@@ -899,6 +923,47 @@ fn split_rows(pieces: &[Turn], texts: &[String]) -> Option<Vec<SplitRow>> {
             .map(|(p, t)| SplitRow { text: t.trim().to_string(), start_s: p.start_s, end_s: p.end_s, speaker: p.key.clone() })
             .collect(),
     )
+}
+
+/// Re-transcribed pieces replace a row only when they share at least this share of its words. A
+/// language or translate setting other than the one the row was recorded with, or a misheard
+/// piece, would otherwise rewrite the row, and its original text is not kept anywhere.
+const MIN_PIECE_WORD_OVERLAP: f64 = 0.5;
+
+/// Lowercased words of letters and digits.
+fn words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+}
+
+/// Share of words two texts have in common, counted with repeats, relative to the longer text; 0
+/// when either has no words.
+fn word_overlap(a: &str, b: &str) -> f64 {
+    let (a, b) = (words(a), words(b));
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let mut left: HashMap<&str, usize> = HashMap::new();
+    for w in &a {
+        *left.entry(w.as_str()).or_default() += 1;
+    }
+    let shared = b
+        .iter()
+        .filter(|w| match left.get_mut(w.as_str()) {
+            Some(n) if *n > 0 => {
+                *n -= 1;
+                true
+            }
+            _ => false,
+        })
+        .count();
+    shared as f64 / a.len().max(b.len()) as f64
+}
+
+/// The rows replacing `row_text` from its re-transcribed pieces: every piece has text and together
+/// they say mostly the same words as the row. None leaves the row to the text split.
+fn accept_piece_texts(row_text: &str, pieces: &[Turn], texts: &[String]) -> Option<Vec<SplitRow>> {
+    let rows = split_rows(pieces, texts)?;
+    (word_overlap(row_text, &texts.join(" ")) >= MIN_PIECE_WORD_OVERLAP).then_some(rows)
 }
 
 /// Re-transcribing the pieces of rows with a speaker change costs one engine call per piece, which
@@ -978,10 +1043,13 @@ async fn run_identify<R: Runtime>(
             text: r.transcript,
         })
         .collect();
+    // Without row times nothing could be labelled; say so instead of diarizing for nothing.
+    ensure_rows_can_be_labelled(&rows)?;
 
     yield_to_recording(app, req, 2).await?;
     let diarize_started = Instant::now();
     let (app_dl, app_wait, app_p) = (app.clone(), app.clone(), app.clone());
+    let automatic = req.automatic;
     let (id_dl, id_wait, id_p) = (meeting_id.clone(), meeting_id.clone(), meeting_id.clone());
     let diarization = diarize_samples(
         samples.clone(),
@@ -992,6 +1060,15 @@ async fn run_identify<R: Runtime>(
         },
         move || emit_progress(&app_wait, &id_wait, "waiting", 2, "Waiting for another speaker identification…"),
         move |p| {
+            // An automatic job yields to a recording started while it diarizes, not only before.
+            if automatic {
+                pause_while_recording(
+                    crate::audio::recording_commands::is_recording_now,
+                    is_cancelled,
+                    || emit_progress(&app_p, &id_p, "waiting", 5 + p * 80 / 100, "Paused while a recording runs…"),
+                    LOCK_POLL,
+                );
+            }
             let stage = if p < 40 { "segmentation" } else if p < 90 { "embeddings" } else { "clustering" };
             emit_progress(&app_p, &id_p, stage, 5 + p * 80 / 100, "Identifying speakers…");
         },
@@ -1081,7 +1158,10 @@ async fn run_identify<R: Runtime>(
     // Read before the transaction: the preference lives in the settings store, not the database.
     let remember_voices = crate::audio::recording_preferences::remember_voices(app).await;
     let mut conn = pool.acquire().await?;
-    let mut tx = sqlx::Connection::begin(&mut *conn).await?;
+    // IMMEDIATE takes the write lock up front. A deferred transaction that reads first fails at
+    // its first write (SQLITE_BUSY_SNAPSHOT) when another connection committed in between, which
+    // would throw away the whole identification.
+    let mut tx = sqlx::Connection::begin_with(&mut *conn, "BEGIN IMMEDIATE").await?;
     if !meeting_exists(&mut tx, &meeting_id).await? {
         // Deleted while the job ran; dropping the transaction rolls it back.
         return Err(Cancelled.into());
@@ -1155,7 +1235,8 @@ async fn build_row_updates<R: Runtime>(
                 };
                 let transcribed = match splitter {
                     Splitter::Engine(engine) => {
-                        transcribe_row_pieces(engine, &row.id, &pieces, time_map, samples, &language, &mut out.pieces_done).await
+                        transcribe_row_pieces(engine, &row.id, &row.text, &pieces, time_map, samples, &language, &mut out.pieces_done)
+                            .await
                     }
                     _ => None,
                 };
@@ -1176,11 +1257,12 @@ async fn build_row_updates<R: Runtime>(
     Ok(out)
 }
 
-/// Re-transcribes each piece of a row with a speaker change. None when a piece has no audio, or
-/// fails or comes back empty.
+/// Re-transcribes each piece of a row with a speaker change. None when a piece has no audio, fails
+/// or comes back empty, or when the pieces do not say what the row says.
 async fn transcribe_row_pieces(
     engine: &BatchEngine,
     row_id: &str,
+    row_text: &str,
     pieces: &[Turn],
     time_map: TimeMap,
     samples: &[f32],
@@ -1203,7 +1285,11 @@ async fn transcribe_row_pieces(
             break;
         }
     }
-    split_rows(pieces, &texts)
+    let rows = accept_piece_texts(row_text, pieces, &texts);
+    if rows.is_none() && texts.len() == pieces.len() {
+        log::warn!("Re-transcribed pieces of row {} do not match its text, splitting its text instead", row_id);
+    }
+    rows
 }
 
 #[cfg(test)]
@@ -1342,6 +1428,65 @@ mod tests {
             split_rows(&pieces, &texts),
             Some(vec![split_row("hello there", 0.0, 2.0, "spk_0"), split_row("general kenobi", 2.0, 4.5, "spk_1")])
         );
+    }
+
+    #[test]
+    fn diarization_pauses_while_a_recording_runs() {
+        let polls = std::cell::Cell::new(0);
+        let paused = std::cell::Cell::new(0);
+        let recording = || {
+            polls.set(polls.get() + 1);
+            polls.get() < 3
+        };
+        pause_while_recording(recording, || false, || paused.set(paused.get() + 1), Duration::from_millis(1));
+        assert_eq!(polls.get(), 3, "waits until the recording ends");
+        assert_eq!(paused.get(), 1, "reports the pause once");
+    }
+
+    #[test]
+    fn diarization_does_not_pause_without_a_recording_or_once_cancelled() {
+        let paused = std::cell::Cell::new(false);
+        pause_while_recording(|| false, || false, || paused.set(true), Duration::from_millis(1));
+        pause_while_recording(|| true, || true, || paused.set(true), Duration::from_millis(1));
+        assert!(!paused.get());
+    }
+
+    #[test]
+    fn identify_needs_rows_with_times() {
+        let row = |span: Option<RowSpan>| StoredRow { id: "r".into(), text: "hi".into(), span };
+        assert!(ensure_rows_can_be_labelled(&[]).is_err());
+        assert!(ensure_rows_can_be_labelled(&[row(None), row(None)]).is_err());
+        assert!(ensure_rows_can_be_labelled(&[row(None), row(Some(RowSpan { start_s: 0.0, end_s: 1.0 }))]).is_ok());
+    }
+
+    #[test]
+    fn word_overlap_ignores_case_and_punctuation() {
+        assert_eq!(word_overlap("We should ship it on Friday.", "we should ship it on friday"), 1.0);
+        assert_eq!(word_overlap("", "anything"), 0.0);
+        assert_eq!(word_overlap("one two three four", "one two"), 0.5);
+    }
+
+    #[test]
+    fn word_overlap_is_zero_for_a_translation() {
+        assert_eq!(word_overlap("Мы выпустим это в пятницу", "We will ship this on Friday"), 0.0);
+    }
+
+    #[test]
+    fn re_transcribed_pieces_replace_a_row_that_says_the_same() {
+        let pieces = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.5, "spk_1")];
+        let texts = vec!["so we ship friday".to_string(), "sounds good".to_string()];
+        assert_eq!(
+            accept_piece_texts("So we ship Friday? Sounds good.", &pieces, &texts),
+            Some(vec![split_row("so we ship friday", 0.0, 2.0, "spk_0"), split_row("sounds good", 2.0, 4.5, "spk_1")])
+        );
+    }
+
+    #[test]
+    fn re_transcribed_pieces_in_another_language_do_not_replace_the_row() {
+        // A row recorded in Russian, re-transcribed with translation to English on.
+        let pieces = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.5, "spk_1")];
+        let texts = vec!["so we ship on friday".to_string(), "sounds good".to_string()];
+        assert_eq!(accept_piece_texts("Значит, выпускаем в пятницу? Отлично.", &pieces, &texts), None);
     }
 
     #[test]

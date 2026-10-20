@@ -1108,6 +1108,11 @@ pub async fn is_recording() -> bool {
     IS_RECORDING.load(Ordering::SeqCst)
 }
 
+/// `is_recording` for code that cannot await, such as a diarization thread.
+pub fn is_recording_now() -> bool {
+    IS_RECORDING.load(Ordering::SeqCst)
+}
+
 /// Get recording statistics
 pub async fn get_transcription_status() -> TranscriptionStatus {
     TranscriptionStatus {
