@@ -12,6 +12,7 @@ import { useMeetingSpeakers } from '@/hooks/useMeetingSpeakers';
 import { usePeople } from '@/hooks/usePeople';
 import { PeopleContext } from '@/components/Speakers/PeopleContext';
 import { decideAutoGuessNames, isWaitingForSpeakers } from '@/lib/speakerNaming';
+import { useLatch } from '@/hooks/useLatch';
 import { useSpeakerIdentification } from '@/hooks/useSpeakerIdentification';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { MeetingDetailsSplitView, type MeetingDetailsTab } from '@/components/MeetingDetails/MeetingDetailsSplitView';
@@ -111,6 +112,10 @@ export default function PageContent({
   // True from an Identify completion until its automatic name guess is requested or skipped; from
   // the request on, the hook's `autoNamingPending` holds the wait until the job's first event.
   const [namingDecisionPending, setNamingDecisionPending] = useState(false);
+  // Auto-summary sends this meeting's transcript to the summary model only when the meeting was
+  // opened right after recording with the switch on. Latched, since the flag clears once the
+  // summary starts while identification can still be running.
+  const autoSummaryCoversMeeting = useLatch(shouldAutoGenerate && isAutoSummary);
   const guessNamesRef = useRef<(automatic: boolean, allowCloud?: boolean) => Promise<void>>(async () => {});
   const onSpeakerJobComplete = useCallback(async (result: SpeakerJobComplete) => {
     if (result.kind === 'naming') {
@@ -122,7 +127,7 @@ export default function PageContent({
       const fresh = await refetchTranscriptsAndSpeakers();
       const request = decideAutoGuessNames({
         speakerIdentification: betaFeatures.speakerIdentification,
-        isAutoSummary,
+        autoSummaryCoversMeeting: autoSummaryCoversMeeting.current,
         speakers: fresh,
       });
       if (request) {
@@ -133,7 +138,7 @@ export default function PageContent({
     } finally {
       setNamingDecisionPending(false);
     }
-  }, [refetchTranscriptsAndSpeakers, refetchSpeakers, refreshPeople, betaFeatures.speakerIdentification, isAutoSummary]);
+  }, [refetchTranscriptsAndSpeakers, refetchSpeakers, refreshPeople, betaFeatures.speakerIdentification, autoSummaryCoversMeeting]);
   const speakerIdentification = useSpeakerIdentification(meeting.id, onSpeakerJobComplete);
   guessNamesRef.current = speakerIdentification.guessNames;
   const {

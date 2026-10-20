@@ -7,17 +7,18 @@ export function hasUnnamedSpeaker(speakers: MeetingSpeaker[]): boolean {
 
 /**
  * Whether to guess names right after Identify. The transcript goes to the summary model; the
- * backend runs an automatic guess only on a local model unless `allowCloud` is set, which it is
- * when the user already sends transcripts to the summary model by turning on auto-summary.
+ * backend runs an automatic guess only on a local model unless `allowCloud` is set. It is set only
+ * when auto-summary sends this meeting's transcript to the summary model anyway (a meeting opened
+ * right after recording with auto-summary on), not for every meeting while the switch is on.
  * Returns the request, or null for no guess.
  */
 export function decideAutoGuessNames(input: {
   speakerIdentification: boolean;
-  isAutoSummary: boolean;
+  autoSummaryCoversMeeting: boolean;
   speakers: MeetingSpeaker[];
 }): { allowCloud: boolean } | null {
   if (!input.speakerIdentification || !hasUnnamedSpeaker(input.speakers)) return null;
-  return { allowCloud: input.isAutoSummary };
+  return { allowCloud: input.autoSummaryCoversMeeting };
 }
 
 export function formatNamingResult(named: number, suggested: number): string {

@@ -7,27 +7,28 @@ import { makeSpeaker } from '../fixtures/speakers';
 const unnamed = [makeSpeaker('spk_0', { display_name: 'Noah', name_source: 'user' }), makeSpeaker('spk_1')];
 const rule = (overrides: Partial<Parameters<typeof decideAutoGuessNames>[0]> = {}) => decideAutoGuessNames({
   speakerIdentification: true,
-  isAutoSummary: false,
+  autoSummaryCoversMeeting: false,
   speakers: unnamed,
   ...overrides,
 });
 
 describe('automatic naming rule', () => {
-  test('cloud is allowed only when auto-summary already sends the transcript there', () => {
-    // The backend declines a cloud model unless the request allows it.
+  test('cloud is allowed only when auto-summary sends this meeting to the model anyway', () => {
+    // The backend declines a cloud model unless the request allows it. The global auto-summary
+    // switch alone is not enough: it only summarises meetings opened right after recording.
     expect(rule()).toEqual({ allowCloud: false });
-    expect(rule({ isAutoSummary: true })).toEqual({ allowCloud: true });
+    expect(rule({ autoSummaryCoversMeeting: true })).toEqual({ allowCloud: true });
   });
 
   test('nothing is requested with the beta off', () => {
-    expect(rule({ speakerIdentification: false, isAutoSummary: true })).toBeNull();
+    expect(rule({ speakerIdentification: false, autoSummaryCoversMeeting: true })).toBeNull();
   });
 
   test('nothing is requested when every speaker with rows has a name', () => {
     const named = [makeSpeaker('spk_0', { display_name: 'Noah' }), makeSpeaker('spk_1', { row_count: 0 })];
     expect(hasUnnamedSpeaker(named)).toBe(false);
     expect(hasUnnamedSpeaker(unnamed)).toBe(true);
-    expect(rule({ speakers: named, isAutoSummary: true })).toBeNull();
+    expect(rule({ speakers: named, autoSummaryCoversMeeting: true })).toBeNull();
   });
 });
 
