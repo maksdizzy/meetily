@@ -196,6 +196,12 @@ pub(crate) fn list_checkpoint_files(dir: &Path) -> std::io::Result<Vec<PathBuf>>
     Ok(files)
 }
 
+/// `path` as an entry of an ffmpeg concat list. Inside the single quotes a `'` is written as `'\''`,
+/// so a meeting titled "Sam's sync" still finalizes.
+fn concat_list_entry(path: &Path) -> String {
+    format!("file '{}'\n", path.display().to_string().replace('\'', r"'\''"))
+}
+
 /// Merge checkpoint files into `output` with ffmpeg's concat demuxer. Lossless checkpoints are
 /// encoded once to AAC-LC, so the file is continuous with a single encoder priming; legacy AAC
 /// checkpoints are joined without re-encoding (each keeps its own priming and padding).
@@ -206,7 +212,7 @@ pub(crate) fn merge_checkpoint_files(files: &[PathBuf], list_file: &Path, output
     let mut list_content = String::new();
     for file in files {
         // Absolute paths (required with -safe 0)
-        list_content.push_str(&format!("file '{}'\n", file.canonicalize()?.display()));
+        list_content.push_str(&concat_list_entry(&file.canonicalize()?));
     }
     std::fs::write(list_file, list_content)?;
 
@@ -520,6 +526,33 @@ mod tests {
             assert!((peak as i64 - expected as i64).abs() <= 160, "impulse at {i}: peak {peak}, expected {expected}");
         }
         assert!(!meeting_folder.join(".checkpoints").exists());
+    }
+
+    #[test]
+    fn concat_list_entries_escape_single_quotes() {
+        assert_eq!(concat_list_entry(Path::new("/r/Sam's sync/a.flac")), "file '/r/Sam'\\''s sync/a.flac'\n");
+        assert_eq!(concat_list_entry(Path::new("/r/plain/a.flac")), "file '/r/plain/a.flac'\n");
+    }
+
+    #[tokio::test]
+    async fn finalize_works_in_a_folder_named_with_a_quote() {
+        let temp_dir = tempdir().unwrap();
+        let meeting_folder = temp_dir.path().join("Sam's sync");
+        std::fs::create_dir_all(meeting_folder.join(".checkpoints")).unwrap();
+        let mut saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000).unwrap();
+        for n in 0..4 {
+            saver
+                .add_chunk(AudioChunk {
+                    data: vec![0.1f32; 24_000],
+                    sample_rate: 48000,
+                    timestamp: n as f64 * 0.5,
+                    chunk_id: n,
+                    device_type: DeviceType::Microphone,
+                })
+                .unwrap();
+        }
+        let path = saver.finalize().await.unwrap();
+        assert!(path.exists());
     }
 
     #[tokio::test]
