@@ -1,3 +1,11 @@
+> **Fork: Meetily Speakers.** This fork of [Meetily](https://github.com/Zackriya-Solutions/meetily) adds local speaker diarization.
+> It combines upstream `v0.4.1` and `devtest` with two open upstream pull requests by
+> [passabilities](https://github.com/passabilities): [#833](https://github.com/Zackriya-Solutions/meetily/pull/833)
+> (identify, name and play back speakers) and [#840](https://github.com/Zackriya-Solutions/meetily/pull/840)
+> (keep saved audio aligned with transcript times).
+> It installs as a separate app, `Meetily Speakers` (`com.maksdizzy.meetily-speakers`), with its own data folder,
+> so it does not touch an installed official Meetily. Auto-update points at this fork's releases.
+
 <div align="center" style="border-bottom: none">
     <h1>
         <img src="docs/Meetily-6.png" style="border-radius: 10px;" />
