@@ -1,7 +1,8 @@
 //! pyannote segmentation-3.0: per-frame activity of up to 3 local speakers per 10 s window.
 use super::reconstruct::FrameGeometry;
 use super::{model_metadata, session_builder};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
+use sha2::{Digest, Sha256};
 use ndarray::{Array3, Ix3};
 use ort::inputs;
 use ort::session::Session;
@@ -24,7 +25,16 @@ fn meta_usize(session: &Session, key: &str, default: usize) -> usize {
 impl SegmentationModel {
     pub fn load(path: &Path) -> Result<Self> {
         crate::ensure_onnx_runtime_available()?;
-        let session = session_builder()?.commit_from_file(path)?;
+        // Installed files are only checked by size; the pinned hash is checked on every load, as
+        // for the speaker embedding model.
+        let model = std::fs::read(path).with_context(|| format!("Failed to read segmentation model {}", path.display()))?;
+        if format!("{:x}", Sha256::digest(&model)) != super::models::SEGMENTATION.sha256 {
+            return Err(anyhow!(
+                "The speaker model file {} is damaged. Delete the speaker models and download them again.",
+                path.display()
+            ));
+        }
+        let session = session_builder()?.commit_from_memory(&model)?;
         let window_samples = meta_usize(&session, "window_size", 160_000);
         let geometry = FrameGeometry {
             frame_shift: meta_usize(&session, "receptive_field_shift", 270),
@@ -68,5 +78,19 @@ impl SegmentationModel {
                     .collect()
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_model_file_that_does_not_match_the_pinned_hash_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("segmentation-3.0.onnx");
+        std::fs::write(&path, b"not the pinned model").unwrap();
+        let err = SegmentationModel::load(&path).err().expect("a damaged model must not load");
+        assert!(err.to_string().contains("damaged"), "{err}");
     }
 }

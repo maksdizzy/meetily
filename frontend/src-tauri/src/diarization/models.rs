@@ -145,6 +145,9 @@ pub(crate) async fn download_file(
             hasher.update(&chunk);
             out.write_all(&chunk).await?;
             received += chunk.len() as u64;
+            if received > file.size_bytes {
+                return Err(anyhow!("Download of {} is larger than expected ({} bytes)", file.file_name, file.size_bytes));
+            }
             on_bytes(received);
         }
         out.flush().await?;
@@ -295,6 +298,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(download_file(&local_client(), &file, dir.path(), &|_| {}, &|| false).await.is_err());
         assert!(!dir.path().join("m.onnx").exists());
+        assert!(!dir.path().join("m.onnx.part").exists());
+    }
+
+    #[tokio::test]
+    async fn a_download_larger_than_the_pinned_size_stops() {
+        let base = serve(vec![7u8; 64 * 1024]).await;
+        let file = ModelFile {
+            file_name: "m.onnx",
+            url: leak(format!("{base}/m.onnx")),
+            sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+            size_bytes: 8,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let err = download_file(&local_client(), &file, dir.path(), &|_| {}, &|| false).await.unwrap_err();
+        assert!(format!("{err:#}").contains("larger than expected"), "{err:#}");
         assert!(!dir.path().join("m.onnx.part").exists());
     }
 
