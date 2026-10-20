@@ -1,0 +1,25 @@
+[package]
+name = "eval-diarize"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Runs the diarization core of upstream PR #833 (included by path from ../upstream-src)
+# on a Meetily recording, outside the Tauri app. Same ort / ndarray / realfft versions as the app.
+[dependencies]
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.11"
+ndarray = "0.16"
+ort = { version = "=2.0.0-rc.10" }
+realfft = "3.4.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0.16"
+
+[profile.release]
+debug = false
+
+# Standalone: not a member of the repository workspace.
+[workspace]
