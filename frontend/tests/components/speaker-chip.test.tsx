@@ -136,3 +136,32 @@ describe('speaker samples', () => {
     expect(buttons(renderer, 'Play a sample of Ana')).toHaveLength(0);
   });
 });
+
+describe('merging speakers', () => {
+  const show = async (onMerge: (from: string, into: string) => Promise<void>) => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<SpeakerChip {...base} speakerKey="spk_0" speakers={speakers} names={{ spk_1: 'Ana' }} onMerge={onMerge} />);
+    });
+    return renderer;
+  };
+
+  test('merges only after the move of every line is confirmed', async () => {
+    const onMerge = mock(async (_from: string, _into: string) => {});
+    const renderer = await show(onMerge);
+    await act(async () => { button(renderer, 'Same person as Ana').props.onClick(); });
+    expect(onMerge).not.toHaveBeenCalled();
+    expect(textOf(renderer.toJSON())).toContain('Move all 3 lines of Speaker 1 to Ana?');
+    await act(async () => { button(renderer, 'Confirm merge into Ana').props.onClick(); });
+    expect(onMerge).toHaveBeenCalledWith('spk_0', 'spk_1');
+  });
+
+  test('cancelling the merge changes nothing and offers the speakers again', async () => {
+    const onMerge = mock(async (_from: string, _into: string) => {});
+    const renderer = await show(onMerge);
+    await act(async () => { button(renderer, 'Same person as Ana').props.onClick(); });
+    await act(async () => { button(renderer, 'Cancel merge').props.onClick(); });
+    expect(onMerge).not.toHaveBeenCalled();
+    expect(buttons(renderer, 'Same person as Ana')).toHaveLength(1);
+  });
+});

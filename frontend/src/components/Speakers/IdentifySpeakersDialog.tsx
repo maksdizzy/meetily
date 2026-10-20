@@ -47,7 +47,7 @@ export function IdentifySpeakersDialog({ open, onOpenChange, hasSpeakers, onRun 
           <DialogTitle>Identify speakers</DialogTitle>
           <DialogDescription>
             Detect who is speaking in this recording. Transcript text only changes on lines where the speaker switches mid-line.
-            {hasSpeakers && ' Names you set are kept where voices match.'}
+            {hasSpeakers && ' Names you set are kept where voices match; merged speakers and lines you moved by hand are redone.'}
           </DialogDescription>
         </DialogHeader>
         <div className="flex items-center justify-between">

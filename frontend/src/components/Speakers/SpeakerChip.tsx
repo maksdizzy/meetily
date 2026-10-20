@@ -51,6 +51,38 @@ function SpeakerOptionButtons({ speakers, names, ariaPrefix, onPick }: {
   );
 }
 
+function MergeConfirmation({ lines, fromLabel, intoLabel, onConfirm, onCancel }: {
+  lines: number;
+  fromLabel: string;
+  intoLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="space-y-2 rounded border border-amber-200 bg-amber-50 p-2 text-sm text-gray-800">
+      <p>Move all {lines} {lines === 1 ? 'line' : 'lines'} of {fromLabel} to {intoLabel}? This cannot be undone.</p>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          aria-label={`Confirm merge into ${intoLabel}`}
+          className="rounded bg-amber-600 px-2 py-1 text-white hover:bg-amber-700"
+          onClick={onConfirm}
+        >
+          Merge
+        </button>
+        <button
+          type="button"
+          aria-label="Cancel merge"
+          className="rounded px-2 py-1 text-gray-700 hover:bg-gray-100"
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SpeakerChipImpl({
   speakerKey,
   transcriptId,
@@ -66,11 +98,17 @@ function SpeakerChipImpl({
   onPlaySample,
 }: SpeakerChipProps) {
   const [open, setOpen] = useState(false);
+  // Merging moves every line of this speaker and cannot be undone, so it is confirmed first.
+  const [mergeInto, setMergeInto] = useState<string | null>(null);
+  const onOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (!next) setMergeInto(null);
+  };
   const label = speakerLabel(speakerKey, names);
   const color = speakerColor(speakerKey);
   const current = speakers.find((s) => s.speaker_key === speakerKey);
   const run = async (action: () => Promise<void>, failure: string) => {
-    if (await attempt(action, failure)) setOpen(false);
+    if (await attempt(action, failure)) onOpenChange(false);
   };
   const chip = (
     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${color.chip}`}>{label}</span>
@@ -90,7 +128,7 @@ function SpeakerChipImpl({
   // Speakers left without rows (every line reassigned away) are not offered.
   const others = speakers.filter((s) => s.speaker_key !== speakerKey && s.row_count > 0);
   const popover = (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         {compact ? (
           <button
@@ -115,12 +153,17 @@ function SpeakerChipImpl({
         {others.length > 0 && (
           <div className="space-y-1">
             <div className="text-xs font-medium text-gray-600">Same person as…</div>
-            <SpeakerOptionButtons
-              speakers={others}
-              names={names}
-              ariaPrefix="Same person as"
-              onPick={(key) => void run(() => onMerge(speakerKey, key), 'Failed to merge speakers')}
-            />
+            {mergeInto ? (
+              <MergeConfirmation
+                lines={current?.row_count ?? 0}
+                fromLabel={label}
+                intoLabel={speakerLabel(mergeInto, names)}
+                onConfirm={() => void run(() => onMerge(speakerKey, mergeInto), 'Failed to merge speakers')}
+                onCancel={() => setMergeInto(null)}
+              />
+            ) : (
+              <SpeakerOptionButtons speakers={others} names={names} ariaPrefix="Same person as" onPick={setMergeInto} />
+            )}
           </div>
         )}
         <div className="space-y-1">
